@@ -1,39 +1,53 @@
-import os
+from bs4 import BeautifulSoup
 import pandas as pd
 
-# === Step 1: Load the Excel file ===
-input_file = "your_excel_file.xlsx"  # replace with your file name
-df = pd.read_excel(input_file)
+# Load your HTML file
+with open("path_to_your_html_report.html", "r", encoding="utf-8") as f:
+    soup = BeautifulSoup(f, "html.parser")
 
-# === Step 2: Select relevant columns (indexing from 0) ===
-case_id_col = df.columns[4]
-section_col = df.columns[6]
-df_filtered = df[[case_id_col, section_col]].dropna()
+data = []
 
-# === Step 3: Create output directory ===
-output_folder = "Fetched Cases"
-os.makedirs(output_folder, exist_ok=True)
+# Traverse each file
+for file_block in soup.find_all("details", class_="file"):
+    # Look inside content box
+    content_boxes = file_block.find_all("div", class_="content box")
+    
+    for box in content_boxes:
+        # Look for each test error
+        for test in box.find_all("details", class_="test error"):
+            summary = test.find("summary")
+            if not summary:
+                continue
 
-# === Step 4: Prepare data for the pivot Excel and TXT files ===
-summary_data = []
+            # Extract status
+            status_tag = summary.find("span", class_="status")
+            status = status_tag.get_text(strip=True) if status_tag else "UNKNOWN"
 
-for section, group in df_filtered.groupby(section_col):
-    case_ids = group[case_id_col].astype(str).unique()
-    case_string = " or ".join(case_ids)
+            # Extract script name
+            funcname_tag = summary.find("span", class_="funcname")
+            funcname = funcname_tag.get_text(strip=True) if funcname_tag else "UNKNOWN"
 
-    txt_filename = f"{section}.txt"
-    txt_path = os.path.join(output_folder, txt_filename)
+            # Extract case ID (params)
+            params_tag = summary.find("span", class_="params")
+            case_id = params_tag.get_text(strip=True).strip("[]") if params_tag else None
 
-    # Write TXT file
-    with open(txt_path, "w") as f:
-        f.write(case_string)
+            # Set column[0] = case_id if exists else funcname
+            identifier = case_id if case_id else funcname
 
-    # Append to summary
-    summary_data.append([section, len(case_ids), txt_filename])
+            # Fetch all <pre> logs
+            logs = []
+            repr_block = test.find("div", class_="repr")
+            if repr_block:
+                for pre in repr_block.find_all("pre"):
+                    logs.append(pre.get_text(strip=True))
 
-# === Step 5: Create Pivot Excel File ===
-pivot_df = pd.DataFrame(summary_data, columns=["Section", "Case Count", "TXT File Name"])
-pivot_excel_path = os.path.join(output_folder, "pivot_chart.xlsx")
-pivot_df.to_excel(pivot_excel_path, index=False)
+            reason = "\n".join(logs) if logs else "No logs found"
 
-print("✅ Files created successfully in 'Fetched Cases' folder.")
+            # Save the row
+            data.append([identifier, status, reason])
+
+# Create a DataFrame and export to Excel
+df = pd.DataFrame(data, columns=["ID or Script Name", "Status", "Reason"])
+df.to_excel("test_report_summary.xlsx", index=False)
+
+print("✅ Excel file 'test_report_summary.xlsx' generated successfully!")
